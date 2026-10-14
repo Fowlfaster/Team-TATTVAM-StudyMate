@@ -1,0 +1,33 @@
+# Environment secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python environments and generated files
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Local application data
+backend/*.db*
+backend/chroma_data/
+backend/chroma_data.*/
+backend/uploads/
+backend/uploads.*/
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

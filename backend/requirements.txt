@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+sqlmodel
+python-dotenv
+python-multipart
+pymupdf
+python-pptx
+yt-dlp
+groq
+sentence-transformers
+chromadb
+PyJWT
+bcrypt
