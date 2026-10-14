@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-export const API_BASE_URL = 'http://localhost:8000'
+export const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '')
 export const AUTH_TOKEN_KEY = 'studymate_token'
 export const DEMO_EMAIL = 'demo@studymate.ai'
 export const DEMO_PASSWORD = 'studymate123'
@@ -37,7 +37,7 @@ export function getApiErrorMessage(error, fallback = 'Something went wrong. Plea
 }
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: API_BASE,
   timeout: 30000,
 })
 
@@ -84,6 +84,16 @@ export const explainSimply = (subjectId, sourceId, topicIds = [], regenerate = f
   api.post('/explain/simple', { subject_id: subjectId, source_id: sourceId || null, topic_ids: topicIds, regenerate }).then((response) => response.data)
 export const explainKeyTopics = (subjectId, sourceId, topicIds = [], maxTopics = 5, regenerate = false) =>
   api.post('/explain/key-topics', { subject_id: subjectId, source_id: sourceId || null, topic_ids: topicIds, max_topics: maxTopics, regenerate }).then((response) => response.data)
+export const elaborateExplanation = (request) =>
+  api.post('/explain/elaborate', {
+    subject_id: request.subjectId,
+    source_id: request.sourceId || null,
+    topic_ids: request.topicIds ?? [],
+    topic_id: request.topicId ?? null,
+    previous_explanation: request.previousExplanation,
+    depth: request.depth,
+    focus: request.focus ?? null,
+  }).then((response) => response.data)
 export const retryKeyTopic = (topic, subjectId, sourceId, topicIds = [], maxTopics = 5) =>
   api.post(`/explain/key-topics/${topic.topic_id}/retry`, {
     subject_id: subjectId,

@@ -3,13 +3,12 @@ import logging
 import math
 import re
 from difflib import SequenceMatcher
-from functools import lru_cache
 from typing import Any
 
 import numpy as np
 from pydantic import Field
 
-from config import EMBEDDING_MODEL
+from rag.embeddings import embed_texts
 from tutor.groq_json import LenientGroqModel, groq_json
 
 
@@ -38,17 +37,8 @@ class TopicExtractionResponse(LenientGroqModel):
 
 # ---------- Embeddings (used to assign chunks to topics) ----------
 
-@lru_cache(maxsize=1)
-def _embedding_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer(EMBEDDING_MODEL)
-
-
 def _embed(texts: list[str]) -> np.ndarray:
-    vectors = _embedding_model().encode(
-        texts, normalize_embeddings=True, show_progress_bar=False
-    )
-    return np.asarray(vectors)
+    return embed_texts(texts)
 
 
 # ---------- Groq call ----------

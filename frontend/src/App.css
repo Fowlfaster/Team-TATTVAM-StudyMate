@@ -150,6 +150,21 @@
 .explain-result-heading h2 { margin: 5px 0 0; color: var(--ink); font: 400 26px/1.2 'DM Serif Display', Georgia, serif; }
 .simple-explanation-content { color: #4b584d; font-size: 13px; line-height: 1.75; }
 .simple-big-picture { display: block; max-width: 780px; margin: 24px auto 30px; color: #33473a; font: 400 20px/1.65 'DM Serif Display', Georgia, serif; text-align: center; }
+.rich-explanation { max-width: 780px; margin: 22px auto; color: #435247; font-size: 13px; line-height: 1.8; }
+.rich-explanation h2, .rich-explanation h3, .rich-explanation h4 { margin: 19px 0 8px; color: var(--ink); font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; }
+.rich-explanation h3 { font-size: 19px; }
+.rich-explanation p { margin: 0 0 12px; }
+.rich-explanation ul, .rich-explanation ol { display: grid; gap: 7px; padding-left: 22px; }
+.rich-explanation mark { padding: 0.08em 0.2em; border-radius: 3px; color: #293017; background: #f2df8b; }
+@media (prefers-color-scheme: dark) { .rich-explanation mark { color: #fff4bf; background: #554819; } }
+.explanation-key-points { margin: 18px 0; padding: 14px 17px; border-left: 3px solid #c3a13d; border-radius: 3px; color: #485344; background: #f8f4df; }
+.explanation-key-points h3 { margin: 0 0 7px; color: #4e542f; font-size: 12px; }
+.explanation-key-points ul { display: grid; gap: 6px; margin: 0; padding-left: 19px; font-size: 11px; line-height: 1.6; }
+.elaboration-panel { margin: 18px 0 25px; }
+.elaborate-button { display: inline-flex; align-items: center; gap: 7px; }
+.elaboration-addition { margin-top: 19px; padding-top: 17px; border-top: 1px solid #e7e9e1; }
+.elaboration-addition > .section-kicker { display: block; margin-bottom: 8px; }
+.elaboration-addition .explanation-key-points { margin-top: 10px; }
 .simple-story-sections > h3, .simple-remember > h3, .simple-glossary > h3 { color: var(--ink); font-size: 15px; }
 .simple-story-section { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 12px; padding: 16px 0; border-top: 1px solid #eceee7; }
 .simple-story-section > .section-kicker { padding-top: 3px; }

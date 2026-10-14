@@ -6,7 +6,7 @@ from typing import Any, Type, TypeVar, get_origin
 from groq import Groq
 from pydantic import BaseModel, ValidationError, field_validator
 
-from config import GROQ_API_KEY, GROQ_CHAT_MODEL
+from config import GROQ_API_KEY, GROQ_CHAT_MODEL, get_groq_api_key
 from tutor.groq_retry import with_rate_limit_retry
 
 T = TypeVar("T", bound=BaseModel)
@@ -42,14 +42,24 @@ def _extract_json(text: str) -> dict:
     return json.loads(text[start:end + 1])
 
 
-def groq_json(system: str, user: str, model_cls: Type[T],
-              max_tokens: int = 8000, temperature: float = 0.2) -> T:
-    if not GROQ_API_KEY:
+def groq_json(
+    system: str,
+    user: str,
+    model_cls: Type[T],
+    max_tokens: int = 8000,
+    temperature: float = 0.2,
+    max_attempts: int = 3,
+    log_raw_response: bool = False,
+) -> T:
+    api_key = GROQ_API_KEY.strip() or get_groq_api_key()
+    if not api_key:
         raise RuntimeError("GROQ_API_KEY is not configured")
-    client = Groq(api_key=GROQ_API_KEY)
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+    client = Groq(api_key=api_key)
     last_error: Exception | None = None
 
-    for attempt in range(3):
+    for attempt in range(max_attempts):
         kwargs = {
             "model": GROQ_CHAT_MODEL,
             "messages": [
@@ -60,7 +70,7 @@ def groq_json(system: str, user: str, model_cls: Type[T],
             "max_completion_tokens": max(4000, max_tokens),
             "reasoning_effort": "low",  # less hidden thinking = more room for the answer
         }
-        if attempt < 2:  # last attempt without strict JSON mode, then we parse it ourselves
+        if attempt < max_attempts - 1:
             kwargs["response_format"] = {"type": "json_object"}
 
         try:
@@ -74,6 +84,8 @@ def groq_json(system: str, user: str, model_cls: Type[T],
         content = choice.message.content or ""
         logger.info("Groq attempt %d: finish_reason=%s, %d chars",
                     attempt + 1, choice.finish_reason, len(content))
+        if log_raw_response:
+            logger.info("Groq raw response (attempt %d): %s", attempt + 1, content)
 
         if choice.finish_reason == "length":  # answer was cut off
             max_tokens = min(max_tokens * 2, 16000)
@@ -83,8 +95,12 @@ def groq_json(system: str, user: str, model_cls: Type[T],
         try:
             return model_cls.model_validate(_extract_json(content))
         except (json.JSONDecodeError, ValidationError, ValueError) as error:
-            logger.warning("Invalid JSON (attempt %d): %s | raw: %s",
-                           attempt + 1, error, content[:800])
+            logger.warning(
+                "Invalid JSON (attempt %d): %s | raw: %s",
+                attempt + 1,
+                error,
+                content if log_raw_response else content[:800],
+            )
             last_error = error
             user += "\n\nYour last reply was not valid JSON for the schema. Return valid JSON only."
 

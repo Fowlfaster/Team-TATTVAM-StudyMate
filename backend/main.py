@@ -13,14 +13,15 @@ from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from auth import get_current_user, hash_password, router as auth_router
-from config import CHROMA_DIR, DATABASE_PATH, UPLOADS_DIR
+from config import CHROMA_COLLECTION, CHROMA_DIR, DATABASE_PATH, FRONTEND_ORIGINS, UPLOADS_DIR
 from db import ConceptEvaluation, ExplanationCache, QuizAttempt, QuizSession, Source, SourceAnalysisCache, Subject, SubjectExplanationCache, Topic, TopicMastery, User, create_db_and_tables, engine
 from ingest.pdf import extract_pdf_text
 from ingest.slides import extract_slide_text
 from ingest.video import transcribe_video
 from ingest.youtube import download_youtube_audio
 from rag.chunker import chunk_pieces
-from rag.store import get_embedding_model, store_chunks
+from rag.embeddings import embed_texts
+from rag.store import store_chunks
 from topic_extractor import extract_topics
 from quiz.adaptive import (
     difficulty_for_score,
@@ -28,13 +29,13 @@ from quiz.adaptive import (
     next_topic,
     update_mastery,
 )
-from quiz.generator import generate_question
+from quiz.generator import generate_questions
 from ranking import rank_topics
 from tutor.qa import AskRequest, AskResponse, answer_question
 from tutor.explanation import generate_topic_explanation
 from tutor.concept_evaluation import generate_evaluation_question, grade_evaluation_answer
 from tutor.source_analysis import analyze_source
-from tutor.explain_modes import explain_key_topics, explain_simply
+from tutor.explain_modes import elaborate_further, explain_key_topic, explain_key_topics, explain_simply
 
 
 VIDEO_EXTENSIONS = {
@@ -139,7 +140,7 @@ def _seed_demo_topics_for_source(source_id: int, user_id: int, file_name: str) -
 
     embeddings = [[0.0 for _ in range(384)] for _ in chunks]
 
-    collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(name="studymate")
+    collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(name=CHROMA_COLLECTION)
     collection.delete(where={"$and": [{"user_id": user_id}, {"source_id": source_id}]})
     collection.add(
         ids=[f"{source_id}-{index}" for index in range(len(chunks))],
@@ -250,6 +251,18 @@ class SubjectDeleteResult(BaseModel):
     sources_removed: int
 
 
+class SourceResponse(BaseModel):
+    id: int
+    user_id: int
+    subject_id: int | None
+    file_name: str
+    source_type: str
+    status: str
+    error_message: str | None
+    created_at: Any
+    file_url: str
+
+
 class QuizAnswerRequest(BaseModel):
     question_id: str
     selected_index: int = Field(ge=0, le=3)
@@ -278,7 +291,16 @@ class KeyTopicRetryRequest(SubjectExplainRequest):
     topic_id: int
     why_it_matters: str = "This topic is important for understanding the material."
     max_topics: int = Field(default=5, ge=1, le=10)
-from tutor.explain_modes import explain_key_topic, explain_key_topics, explain_simply
+
+
+class ElaborateRequest(BaseModel):
+    subject_id: int
+    source_id: int | None = None
+    topic_ids: list[int] = Field(default_factory=list)
+    topic_id: int | None = None
+    previous_explanation: str = Field(min_length=1)
+    depth: int = Field(ge=1, le=3)
+    focus: str | None = None
 
 
 class QuizStartRequest(BaseModel):
@@ -287,7 +309,7 @@ class QuizStartRequest(BaseModel):
     subject_id: int | None = None
     topic_id: int | None = None
     topic_ids: list[int] = Field(default_factory=list)
-    num_questions: Literal[5, 10, 15]
+    num_questions: Literal[5, 10, 15] = 5
 
 
 class EvaluationQuestionRequest(BaseModel):
@@ -305,6 +327,46 @@ ACTIVE_QUIZZES: dict[str, dict] = {}
 def _question_hash(question: str) -> str:
     normalized = " ".join(question.casefold().split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _source_response(source: Source) -> SourceResponse:
+    return SourceResponse(
+        id=int(source.id),
+        user_id=source.user_id,
+        subject_id=source.subject_id,
+        file_name=source.file_name,
+        source_type=source.source_type,
+        status=source.status,
+        error_message=source.error_message,
+        created_at=source.created_at,
+        file_url=f"/sources/{source.id}/file",
+    )
+
+
+def _record_explained_topics(user_id: int, topic_ids: list[int]) -> None:
+    unique_topic_ids = list(dict.fromkeys(topic_ids))
+    if not unique_topic_ids:
+        return
+    with Session(engine) as session:
+        topics = session.exec(select(Topic).where(
+            Topic.user_id == user_id,
+            Topic.id.in_(unique_topic_ids),
+        )).all()
+        mastery_by_name = {
+            record.topic: record
+            for record in session.exec(
+                select(TopicMastery).where(TopicMastery.user_id == user_id)
+            ).all()
+        }
+        for topic in topics:
+            mastery = mastery_by_name.get(topic.name)
+            if mastery is None:
+                mastery = TopicMastery(user_id=user_id, topic=topic.name, explained=True)
+                mastery_by_name[topic.name] = mastery
+            else:
+                mastery.explained = True
+            session.add(mastery)
+        session.commit()
 
 
 def _ingest_source(
@@ -384,7 +446,7 @@ def _ingest_source(
         if chunks_stored:
             try:
                 collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-                    name="studymate"
+                    name=CHROMA_COLLECTION
                 )
                 collection.delete(
                     where={"$and": [{"user_id": user_id}, {"source_id": source_id}]}
@@ -479,7 +541,7 @@ def _topic_chunk_context(
     if subject_id is not None:
         filters.append({"subject_id": subject_id})
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     stored_chunks = collection.get(
         ids=chunk_ids,
@@ -515,7 +577,7 @@ def _topic_chunk_context(
 
 def _backfill_chroma_subject_metadata() -> None:
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     with Session(engine) as session:
         sources = session.exec(select(Source)).all()
@@ -535,12 +597,56 @@ def _backfill_chroma_subject_metadata() -> None:
                 )
 
 
+def _migrate_legacy_chroma_collection() -> None:
+    legacy_name = "studymate"
+    if CHROMA_COLLECTION == legacy_name:
+        return
+    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    collection_names = {collection.name for collection in client.list_collections()}
+    if legacy_name not in collection_names:
+        return
+
+    legacy = client.get_collection(legacy_name)
+    active = client.get_or_create_collection(name=CHROMA_COLLECTION)
+    total = legacy.count()
+    if total == 0:
+        return
+
+    logger.info("Migrating %s legacy Chroma chunks into %s", total, CHROMA_COLLECTION)
+    try:
+        for offset in range(0, total, 128):
+            batch = legacy.get(
+                limit=128,
+                offset=offset,
+                include=["documents", "metadatas"],
+            )
+            ids = batch.get("ids", []) or []
+            documents = batch.get("documents", []) or []
+            metadatas = batch.get("metadatas", []) or []
+            existing = set(active.get(ids=ids, include=[]).get("ids", []) or [])
+            missing = [index for index, chunk_id in enumerate(ids) if chunk_id not in existing]
+            if not missing:
+                continue
+            missing_documents = [documents[index] for index in missing]
+            active.upsert(
+                ids=[ids[index] for index in missing],
+                documents=missing_documents,
+                embeddings=embed_texts(missing_documents).tolist(),
+                metadatas=[metadatas[index] for index in missing],
+            )
+    except Exception:
+        logger.exception("Could not migrate legacy Chroma chunks into %s", CHROMA_COLLECTION)
+        return
+    logger.info("Legacy Chroma migration completed for %s", CHROMA_COLLECTION)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
     create_db_and_tables()
+    _migrate_legacy_chroma_collection()
     _backfill_chroma_subject_metadata()
     ensure_demo_seed()
     yield
@@ -551,7 +657,7 @@ app.include_router(auth_router)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[origin.strip().rstrip("/") for origin in FRONTEND_ORIGINS if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -571,13 +677,13 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-@app.post("/upload", response_model=Source)
+@app.post("/upload", response_model=SourceResponse)
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     subject_id: int = Form(...),
     user: User = Depends(get_current_user),
-) -> Source:
+) -> SourceResponse:
     if not file.filename:
         raise HTTPException(status_code=400, detail="A filename is required")
 
@@ -654,15 +760,15 @@ async def upload_file(
         source_type,
         subject_id,
     )
-    return source
+    return _source_response(source)
 
 
-@app.post("/upload/youtube", response_model=Source)
+@app.post("/upload/youtube", response_model=SourceResponse)
 def upload_youtube(
     request: YouTubeUpload,
     background_tasks: BackgroundTasks,
     user: User = Depends(get_current_user),
-) -> Source:
+) -> SourceResponse:
     url = request.url.strip()
     if not url.startswith(("https://", "http://")):
         raise HTTPException(status_code=400, detail="A valid HTTP or HTTPS URL is required")
@@ -679,7 +785,7 @@ def upload_youtube(
         request.subject_id,
         url,
     )
-    return source
+    return _source_response(source)
 
 
 @app.get("/subjects", response_model=list[SubjectResponse])
@@ -783,11 +889,11 @@ def delete_subject(
     return SubjectDeleteResult(deleted=True, sources_removed=len(source_ids))
 
 
-@app.get("/sources", response_model=list[Source])
+@app.get("/sources", response_model=list[SourceResponse])
 def list_sources(
     subject_id: int | None = None,
     user: User = Depends(get_current_user),
-) -> list[Source]:
+) -> list[SourceResponse]:
     with Session(engine) as session:
         statement = select(Source).where(Source.user_id == user.id)
         if subject_id is not None:
@@ -795,7 +901,10 @@ def list_sources(
             if subject is None or subject.user_id != user.id:
                 raise HTTPException(status_code=404, detail="Subject not found")
             statement = statement.where(Source.subject_id == subject_id)
-        return list(session.exec(statement.order_by(Source.created_at.desc())).all())
+        return [
+            _source_response(source)
+            for source in session.exec(statement.order_by(Source.created_at.desc())).all()
+        ]
 
 
 def _delete_source_data(source_id: int, user_id: int) -> int:
@@ -821,7 +930,7 @@ def _delete_source_data(source_id: int, user_id: int) -> int:
         for topic in source_topics:
             session.delete(topic)
 
-        collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(name="studymate")
+        collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(name=CHROMA_COLLECTION)
         stored = collection.get(
             where={"$and": [{"user_id": user_id}, {"source_id": source_id}]},
             include=[],
@@ -837,7 +946,8 @@ def _delete_source_data(source_id: int, user_id: int) -> int:
 
 
 @app.get("/sources/{source_id}/video")
-def get_source_video(
+@app.get("/sources/{source_id}/file")
+def get_source_file(
     source_id: int,
     user: User = Depends(get_current_user),
 ) -> FileResponse:
@@ -849,7 +959,7 @@ def get_source_video(
             raise HTTPException(status_code=403, detail="You do not own this source")
     matching_files = list(UPLOADS_DIR.glob(f"{source_id}-*"))
     if not matching_files:
-        raise HTTPException(status_code=404, detail="Video file not found")
+        raise HTTPException(status_code=404, detail="Source file not found")
     return FileResponse(matching_files[0])
 
 
@@ -874,7 +984,7 @@ def debug_source(
         error_message = source.error_message
 
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     stored = collection.get(
         where={"$and": [{"user_id": int(user.id)}, {"source_id": source_id}]},
@@ -935,6 +1045,7 @@ def explain_topic(
     request: ExplainRequest,
     user: User = Depends(get_current_user),
 ) -> dict:
+    cached_payload = None
     with Session(engine) as session:
         topic = session.get(Topic, request.topic_id)
         if topic is None:
@@ -944,11 +1055,16 @@ def explain_topic(
 
         cache = session.get(ExplanationCache, (request.topic_id, request.level))
         if cache is not None:
-            return cache.payload
+            cached_payload = cache.payload
         topic_name = topic.name
         chunk_ids = topic.chunk_ids
+        source_id = int(topic.source_id)
 
-    chunks = _topic_chunk_context(int(topic.source_id), int(user.id), chunk_ids)
+    if cached_payload is not None:
+        _record_explained_topics(int(user.id), [request.topic_id])
+        return cached_payload
+
+    chunks = _topic_chunk_context(source_id, int(user.id), chunk_ids)
 
     try:
         explanation = generate_topic_explanation(
@@ -970,6 +1086,7 @@ def explain_topic(
         "level": request.level,
         **explanation,
     }
+    _record_explained_topics(int(user.id), [request.topic_id])
     with Session(engine) as session:
         session.add(ExplanationCache(
             topic_id=request.topic_id,
@@ -985,6 +1102,7 @@ def analyze_source_route(
     request: AnalyzeRequest,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
+    cached_payload = None
     with Session(engine) as session:
         source = session.get(Source, request.source_id)
         if source is None:
@@ -998,7 +1116,7 @@ def analyze_source_route(
             )
         cached = session.get(SourceAnalysisCache, (request.source_id, request.level))
         if cached is not None:
-            return cached.payload
+            cached_payload = cached.payload
         source_name = source.file_name
         topic_rows = session.exec(
             select(Topic)
@@ -1007,6 +1125,11 @@ def analyze_source_route(
         ).all()
         topics = [{"id": int(topic.id), "name": topic.name} for topic in topic_rows]
         topic_chunks = {int(topic.id): topic.chunk_ids for topic in topic_rows}
+
+    topic_ids = [topic["id"] for topic in topics]
+    if cached_payload is not None:
+        _record_explained_topics(int(user.id), topic_ids)
+        return cached_payload
 
     if not topics:
         raise HTTPException(status_code=404, detail="No topics are available for this source")
@@ -1025,6 +1148,7 @@ def analyze_source_route(
         raise HTTPException(status_code=502, detail=str(error) or "Source analysis failed") from error
 
     payload = {"source_id": request.source_id, "level": request.level, **analysis}
+    _record_explained_topics(int(user.id), topic_ids)
     with Session(engine) as session:
         session.add(SourceAnalysisCache(
             source_id=request.source_id,
@@ -1124,13 +1248,22 @@ def explain_subject_simply(
     request: SubjectExplainRequest,
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    cache_key = _subject_explanation_cache_key(request.subject_id, request.source_id, "simple", topic_ids=request.topic_ids)
+    cache_key = _subject_explanation_cache_key(request.subject_id, request.source_id, "simple-v2", topic_ids=request.topic_ids)
+    subject_name, topics = _load_subject_topics(request.subject_id, request.source_id, int(user.id), request.topic_ids)
+    cached_payload = None
     if not request.regenerate:
         with Session(engine) as session:
             cached = session.get(SubjectExplanationCache, cache_key)
             if cached is not None:
-                return cached.payload
-    subject_name, topics = _load_subject_topics(request.subject_id, request.source_id, int(user.id), request.topic_ids)
+                cached_payload = cached.payload
+        if cached_payload is not None:
+            explained_topic_ids = [
+                item["topic_id"]
+                for item in cached_payload.get("topics", [])
+                if not item.get("generation_failed")
+            ]
+            _record_explained_topics(int(user.id), explained_topic_ids)
+            return cached_payload
     try:
         result = explain_simply(subject_name, topics)
     except LookupError as error:
@@ -1141,6 +1274,12 @@ def explain_subject_simply(
         logger.exception("Simple explanation failed for subject %s", request.subject_id)
         raise HTTPException(status_code=502, detail=str(error) or "Simple explanation failed") from error
     payload = {"subject_id": request.subject_id, "source_id": request.source_id, **result}
+    explained_topic_ids = [
+        item["topic_id"]
+        for item in result.get("topics", [])
+        if not item.get("generation_failed")
+    ]
+    _record_explained_topics(int(user.id), explained_topic_ids)
     _save_subject_explanation(cache_key, request.subject_id, request.source_id, "simple", payload)
     return payload
 
@@ -1153,12 +1292,16 @@ def explain_subject_key_topics(
     cache_key = _subject_explanation_cache_key(
         request.subject_id, request.source_id, "key-topics", request.max_topics, request.topic_ids,
     )
+    subject_name, topics = _load_subject_topics(request.subject_id, request.source_id, int(user.id), request.topic_ids)
+    cached_payload = None
     if not request.regenerate:
         with Session(engine) as session:
             cached = session.get(SubjectExplanationCache, cache_key)
             if cached is not None:
-                return cached.payload
-    subject_name, topics = _load_subject_topics(request.subject_id, request.source_id, int(user.id), request.topic_ids)
+                cached_payload = cached.payload
+        if cached_payload is not None:
+            _record_explained_topics(int(user.id), [topic["id"] for topic in topics])
+            return cached_payload
     try:
         result = explain_key_topics(subject_name, topics, request.max_topics)
     except LookupError as error:
@@ -1169,6 +1312,7 @@ def explain_subject_key_topics(
         logger.exception("Key-topic explanation failed for subject %s", request.subject_id)
         raise HTTPException(status_code=502, detail=str(error) or "Key-topic explanation failed") from error
     payload = {"subject_id": request.subject_id, "source_id": request.source_id, **result}
+    _record_explained_topics(int(user.id), [topic["id"] for topic in topics])
     _save_subject_explanation(cache_key, request.subject_id, request.source_id, "key-topics", payload)
     return payload
 
@@ -1197,6 +1341,8 @@ def retry_subject_key_topic(
         logger.exception("Key topic retry failed for topic %s", topic_id)
         raise HTTPException(status_code=502, detail=str(error) or "Key topic generation failed") from error
 
+    _record_explained_topics(int(user.id), [topic_id])
+
     cache_key = _subject_explanation_cache_key(
         request.subject_id,
         request.source_id,
@@ -1216,6 +1362,39 @@ def retry_subject_key_topic(
             session.add(cache)
             session.commit()
     return result
+
+
+@app.post("/explain/elaborate")
+def elaborate_explanation(
+    request: ElaborateRequest,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    topic_ids = [request.topic_id] if request.topic_id is not None else request.topic_ids
+    subject_name, topics = _load_subject_topics(
+        request.subject_id,
+        request.source_id,
+        int(user.id),
+        topic_ids or None,
+    )
+    try:
+        result = elaborate_further(
+            subject_name,
+            topics,
+            request.previous_explanation,
+            request.depth,
+            request.focus,
+        )
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        logger.exception("Explanation elaboration failed for subject %s", request.subject_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Could not elaborate on this explanation. Please try again.",
+        ) from error
+    return {"depth": request.depth, **result}
 
 
 @app.post("/evaluate/question")
@@ -1358,6 +1537,8 @@ def start_quiz_session(
         requested_topic_ids = list(dict.fromkeys(
             [*request.topic_ids, *([request.topic_id] if request.topic_id is not None else [])]
         ))
+        if not requested_topic_ids:
+            raise HTTPException(status_code=422, detail="Select at least one topic before starting a quiz")
         if request.topic_id is not None:
             requested_topic = session.get(Topic, request.topic_id)
             if requested_topic is None or requested_topic.user_id != user.id:
@@ -1472,7 +1653,7 @@ def get_next_quiz(
             source_id = source_id or (session_source_ids[0] if len(session_source_ids) == 1 else None)
             topic_id = topic_id or (session_topic_ids[0] if len(session_topic_ids) == 1 else None)
             scoped_source_ids = session_source_ids
-            if not topics and session_topic_ids:
+            if session_topic_ids:
                 session_topics = session.exec(select(Topic.name).where(
                     Topic.user_id == user.id,
                     Topic.id.in_(session_topic_ids),
@@ -1552,10 +1733,19 @@ def get_next_quiz(
             attempt_source_ids = sorted({int(value) for value in scoped_source_ids})
 
     generated = None
-    generated_hash = None
-    for _ in range(3):
+    queued_questions: list[dict[str, Any]] = []
+    if active_session_id is not None:
+        with Session(engine) as session:
+            quiz_session = session.get(QuizSession, active_session_id)
+            if quiz_session is None or quiz_session.user_id != user.id:
+                raise HTTPException(status_code=404, detail="Quiz session not found")
+            queued_questions = list(quiz_session.generated_questions or [])
+
+    if queued_questions:
+        generated = queued_questions.pop(0)
+    else:
         try:
-            generated = generate_question(
+            batch = generate_questions(
                 topic_name,
                 difficulty,
                 int(user.id),
@@ -1563,21 +1753,30 @@ def get_next_quiz(
                 exclude_questions=exclude_questions,
                 subject_id=subject_id,
             )
+            excluded_hashes = {_question_hash(question) for question in exclude_questions}
+            unique_batch: list[dict[str, Any]] = []
+            batch_hashes: set[str] = set()
+            for question in batch:
+                question_hash = _question_hash(question["question"])
+                if question_hash not in excluded_hashes and question_hash not in batch_hashes:
+                    unique_batch.append(question)
+                    batch_hashes.add(question_hash)
+            if not unique_batch:
+                raise ValueError("The model repeated previously asked questions")
+            generated = unique_batch[0]
+            queued_questions = unique_batch[1:]
         except LookupError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
         except Exception as error:
             logger.exception("Quiz generation failed for topic %s", topic_name)
-            raise HTTPException(status_code=502, detail="Could not generate a quiz question") from error
-        generated_hash = _question_hash(generated["question"])
-        if active_session_id is None or generated_hash not in {
-            _question_hash(question) for question in exclude_questions
-        }:
-            break
-        exclude_questions.append(generated["question"])
-    else:
-        raise HTTPException(status_code=502, detail="Could not generate a new question for this quiz session")
+            raise HTTPException(
+                status_code=502,
+                detail="Quiz generation failed after one retry. Please try again or upload a clearer document.",
+            ) from error
+
+    generated_hash = _question_hash(generated["question"])
 
     question_number = None
     num_questions = None
@@ -1590,6 +1789,7 @@ def get_next_quiz(
                 raise HTTPException(status_code=409, detail="Question already used in this quiz session")
             quiz_session.question_hashes = [*quiz_session.question_hashes, generated_hash]
             quiz_session.question_texts = [*quiz_session.question_texts, generated["question"]]
+            quiz_session.generated_questions = queued_questions
             question_number = len(quiz_session.question_hashes)
             num_questions = quiz_session.num_questions
             session.add(quiz_session)
@@ -1746,13 +1946,35 @@ def get_mastery(
             subject = session.get(Subject, subject_id)
             if subject is None or subject.user_id != user.id:
                 raise HTTPException(status_code=404, detail="Subject not found")
-        mastery_records = ensure_mastery_topics(session, int(user.id), source_ids, topics, subject_id)
-        session.commit()
+        attempts = session.exec(select(QuizAttempt).where(QuizAttempt.user_id == user.id)).all()
+        attempted_topics = {
+            attempt.topic
+            for attempt in attempts
+            if (not source_ids or set(source_ids).intersection(attempt.source_ids or []))
+            and (not topics or attempt.topic in topics)
+        }
+        subject_topics = None
+        if subject_id is not None:
+            subject_topics = set(session.exec(select(Topic.name).where(
+                Topic.user_id == user.id,
+                Topic.subject_id == subject_id,
+            )).all())
+        mastery_records = session.exec(select(TopicMastery).where(
+            TopicMastery.user_id == user.id,
+            TopicMastery.explained.is_(True),
+        )).all()
         return [
             {
                 "topic": mastery.topic,
                 "score": mastery.score,
                 "difficulty": difficulty_for_score(mastery.score),
             }
-            for mastery in sorted(mastery_records, key=lambda item: (item.score, item.topic))
+            for mastery in sorted(
+                (
+                    record for record in mastery_records
+                    if record.topic in attempted_topics
+                    and (subject_topics is None or record.topic in subject_topics)
+                ),
+                key=lambda item: (item.score, item.topic),
+            )
         ]

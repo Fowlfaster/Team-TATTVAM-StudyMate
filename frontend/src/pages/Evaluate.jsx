@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, Brain, CircleCheck, CircleX, LoaderCircle, TriangleAlert } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { API_BASE_URL, createEvaluationQuestion, getApiErrorMessage, submitEvaluationAnswer } from '../api'
+import { API_BASE, createEvaluationQuestion, getApiErrorMessage, submitEvaluationAnswer } from '../api'
 import CitationChip from '../components/CitationChip'
 import LoadingStatus from '../components/LoadingStatus'
 import SubjectScopeSelector from '../components/SubjectScopeSelector'
@@ -77,7 +77,7 @@ export default function Evaluate() {
   const videoUrl = videoCitation
     ? /^https?:\/\//i.test(videoCitation.file_name)
       ? videoCitation.file_name
-      : `${API_BASE_URL}/sources/${videoCitation.source_id}/video`
+      : `${API_BASE}/sources/${videoCitation.source_id}/video`
     : ''
 
   const submitAnswer = async (event) => {

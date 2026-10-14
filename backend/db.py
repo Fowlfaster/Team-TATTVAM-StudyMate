@@ -112,6 +112,10 @@ class QuizSession(SQLModel, table=True):
     question_hashes: list[str] = Field(sa_column=Column(JSON, nullable=False))
     question_texts: list[str] = Field(sa_column=Column(JSON, nullable=False))
     answer_records: list[dict[str, Any]] = Field(sa_column=Column(JSON, nullable=False))
+    generated_questions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSON, nullable=False, default=list),
+    )
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -119,6 +123,7 @@ class TopicMastery(SQLModel, table=True):
     user_id: int = Field(primary_key=True, foreign_key="user.id")
     topic: str = Field(primary_key=True)
     score: float = Field(default=0.5)
+    explained: bool = Field(default=False)
 
 
 sqlite_url = f"sqlite:///{DATABASE_PATH.as_posix()}"
@@ -207,7 +212,7 @@ def create_db_and_tables() -> None:
             columns.add(column_name)
 
     quiz_session_columns = {column["name"] for column in inspect(engine).get_columns(QuizSession.__tablename__)}
-    for column_name in ("source_ids", "topic_ids"):
+    for column_name in ("source_ids", "topic_ids", "generated_questions"):
         if column_name not in quiz_session_columns:
             with engine.begin() as connection:
                 connection.exec_driver_sql(
@@ -218,4 +223,11 @@ def create_db_and_tables() -> None:
         with engine.begin() as connection:
             connection.exec_driver_sql(
                 "ALTER TABLE quizsession ADD COLUMN subject_id INTEGER REFERENCES subject(id)"
+            )
+
+    mastery_columns = {column["name"] for column in inspect(engine).get_columns(TopicMastery.__tablename__)}
+    if "explained" not in mastery_columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(
+                "ALTER TABLE topicmastery ADD COLUMN explained BOOLEAN NOT NULL DEFAULT 0"
             )

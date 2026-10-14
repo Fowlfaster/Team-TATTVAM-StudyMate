@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from tutor.groq_json import LenientGroqModel, groq_json
 from rag.retriever import retrieve_chunks
@@ -15,30 +15,48 @@ BLOOM_LEVELS: dict[Difficulty, BloomLevel] = {
 }
 
 
-class QuizQuestionResponse(LenientGroqModel):
+class GeneratedQuizQuestion(LenientGroqModel):
     question: str = ""
     options: list[str] = Field(default_factory=list)
-    correct_index: int = 0
+    answer_index: int = Field(default=0, ge=0, le=3)
     explanation: str = ""
-    citation: Any = 0
-    bloom_level: str = ""
-    glossary: list[dict[str, str]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_required_fields(self) -> "GeneratedQuizQuestion":
+        required = {"question", "options", "answer_index", "explanation"}
+        if not required.issubset(self.model_fields_set):
+            raise ValueError("Quiz question is missing required fields")
+        if not self.question.strip() or not self.explanation.strip():
+            raise ValueError("Quiz question and explanation cannot be empty")
+        if len(self.options) != 4 or not all(option.strip() for option in self.options):
+            raise ValueError("Quiz question must have four non-empty options")
+        return self
 
 
-def generate_question(
+class QuizQuestionsResponse(LenientGroqModel):
+    questions: list[GeneratedQuizQuestion] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_question_count(self) -> "QuizQuestionsResponse":
+        if "questions" not in self.model_fields_set or len(self.questions) != 5:
+            raise ValueError("Quiz response must contain exactly five questions")
+        return self
+
+
+def generate_questions(
     topic: str,
     difficulty: Difficulty,
     user_id: int,
     source_ids: list[int] | None = None,
     exclude_questions: list[str] | None = None,
     subject_id: int | None = None,
-) -> dict[str, Any]:
+) -> list[dict[str, Any]]:
     if difficulty not in ("easy", "medium", "hard"):
         raise ValueError("Difficulty must be easy, medium, or hard")
     chunks = retrieve_chunks(
         question=f"Key learning material about {topic}",
         user_id=user_id,
-        limit=6,
+        limit=10,
         topic=topic,
         source_ids=source_ids,
         subject_id=subject_id,
@@ -52,49 +70,52 @@ def generate_question(
         for chunk in chunks
     )
     generated_model = groq_json(
-        "Create one accurate multiple-choice question using only the supplied study material. "
-        "Return JSON with question, options (four strings), correct_index (0-3), explanation, "
-        "citation (supporting context number), bloom_level, and glossary [{term, definition}]. "
-        "Mark terms as [[keyword]] and key sentences as {{key sentence}}. Do not use outside knowledge.",
+        "Create exactly five accurate multiple-choice questions using only the supplied document excerpts. "
+        "Return strict JSON only, with this exact shape and keys: "
+        '{"questions":[{"question":"","options":["","","",""],'
+        '"answer_index":0,"explanation":""}]}. '
+        "Each answer_index must be an integer from 0 to 3. Do not add citations, markdown, or extra fields. "
+        "Do not use outside knowledge.",
         (
-            f"Topic: {topic}\nDifficulty: {difficulty}\n"
-            f"Questions already asked in this session (do not repeat): {exclude_questions or []}\n\n"
-            f"Numbered study material:\n{context}"
+            f"Selected topic: {topic}\nDifficulty: {difficulty}\n"
+            f"Generate five distinct questions. Do not repeat these earlier questions: "
+            f"{exclude_questions or []}\n\n"
+            f"Uploaded document excerpts (use no other source):\n{context}"
         ),
-        QuizQuestionResponse,
+        QuizQuestionsResponse,
+        max_tokens=2000,
+        max_attempts=2,
+        log_raw_response=True,
     )
-    generated = generated_model.model_dump()
-    question = str(generated["question"]).strip()
-    options = generated["options"]
-    correct_index = int(generated["correct_index"])
-    explanation = str(generated["explanation"]).strip()
-    citation_number = int(generated["citation"])
+    return [
+        {
+            "question": item.question.strip(),
+            "options": [option.strip() for option in item.options],
+            "correct_index": item.answer_index,
+            "explanation": item.explanation.strip(),
+            "citation": chunks[index % len(chunks)]["citation"],
+            "topic": topic,
+            "difficulty": difficulty,
+            "bloom_level": BLOOM_LEVELS[difficulty],
+            "glossary": [],
+        }
+        for index, item in enumerate(generated_model.questions)
+    ]
 
-    if not question or not explanation or len(options) != 4:
-        raise ValueError("Groq returned an incomplete quiz question")
-    if not all(isinstance(option, str) and option.strip() for option in options):
-        raise ValueError("Quiz options must be four non-empty strings")
-    if correct_index not in range(4):
-        raise ValueError("correct_index must be from 0 to 3")
 
-    citation_chunk = next(
-        (chunk for chunk in chunks if chunk["citation"]["n"] == citation_number),
-        None,
-    )
-    if citation_chunk is None:
-        raise ValueError("Quiz citation does not match a retrieved chunk")
-
-    return {
-        "question": question,
-        "options": [option.strip() for option in options],
-        "correct_index": correct_index,
-        "explanation": explanation,
-        "citation": citation_chunk["citation"],
-        "topic": topic,
-        "bloom_level": BLOOM_LEVELS[difficulty],
-        "glossary": [
-            {"term": str(item["term"]), "definition": str(item["definition"])}
-            for item in generated.get("glossary", [])
-            if isinstance(item, dict) and item.get("term") and item.get("definition")
-        ],
-    }
+def generate_question(
+    topic: str,
+    difficulty: Difficulty,
+    user_id: int,
+    source_ids: list[int] | None = None,
+    exclude_questions: list[str] | None = None,
+    subject_id: int | None = None,
+) -> dict[str, Any]:
+    return generate_questions(
+        topic,
+        difficulty,
+        user_id,
+        source_ids=source_ids,
+        exclude_questions=exclude_questions,
+        subject_id=subject_id,
+    )[0]

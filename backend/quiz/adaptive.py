@@ -3,7 +3,7 @@ from typing import Literal
 import chromadb
 from sqlmodel import Session, select
 
-from config import CHROMA_DIR
+from config import CHROMA_COLLECTION, CHROMA_DIR
 from db import TopicMastery
 
 
@@ -17,7 +17,7 @@ def available_topics(
     subject_id: int | None = None,
 ) -> list[str]:
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     filters: list[dict] = [{"user_id": user_id}]
     if subject_id is not None:

@@ -2,19 +2,8 @@ from typing import Any
 
 import chromadb
 
-from config import CHROMA_DIR, EMBEDDING_MODEL
-
-
-_embedding_model: Any = None
-
-
-def get_embedding_model() -> Any:
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-
-        _embedding_model = SentenceTransformer(EMBEDDING_MODEL)
-    return _embedding_model
+from config import CHROMA_COLLECTION, CHROMA_DIR
+from rag.embeddings import embed_texts
 
 
 def store_chunks(
@@ -29,10 +18,10 @@ def store_chunks(
         raise ValueError("No text could be extracted from this source")
 
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     documents = [chunk["text"] for chunk in chunks]
-    embeddings = get_embedding_model().encode(documents, normalize_embeddings=True).tolist()
+    embeddings = embed_texts(documents).tolist()
     metadatas = []
     for chunk in chunks:
         topic = chunk.get("topic")

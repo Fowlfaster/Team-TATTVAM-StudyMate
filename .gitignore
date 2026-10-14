@@ -9,10 +9,17 @@
 # Python environments and generated files
 venv/
 .venv/
+node_modules/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+*.db
+chroma_data/
+uploads/
+model_cache/
+dist/
+test_groq.py
 
 # Local application data
 backend/*.db*

@@ -2,8 +2,8 @@ from typing import Any
 
 import chromadb
 
-from config import CHROMA_DIR
-from rag.store import get_embedding_model
+from config import CHROMA_COLLECTION, CHROMA_DIR
+from rag.embeddings import embed_query
 
 
 def retrieve_chunks(
@@ -19,7 +19,7 @@ def retrieve_chunks(
         return []
 
     collection = chromadb.PersistentClient(path=str(CHROMA_DIR)).get_or_create_collection(
-        name="studymate"
+        name=CHROMA_COLLECTION
     )
     filters: list[dict[str, Any]] = [{"user_id": user_id}]
     if subject_id is not None:
@@ -36,9 +36,7 @@ def retrieve_chunks(
     if result_count == 0:
         return []
 
-    query_embedding = get_embedding_model().encode(
-        [question], normalize_embeddings=True
-    ).tolist()[0]
+    query_embedding = embed_query(question).tolist()
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=min(limit, result_count),

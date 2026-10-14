@@ -58,7 +58,7 @@ export default function Login() {
             <input autoComplete="current-password" className="mt-2 w-full rounded border border-[#dfe4da] px-3 py-2.5 text-sm outline-none focus:border-[#71917a]" onChange={(event) => setPassword(event.target.value)} required type="password" value={password} />
           </label>
           {error && <p className="text-sm text-[#a33f34]" role="alert">{error}</p>}
-          <button className="w-full rounded bg-[#284e3c] px-4 py-3 text-sm font-bold text-white hover:bg-[#1d3e2d] disabled:opacity-50" disabled={busy} type="submit">{busy ? 'Signing in…' : 'Sign in'}</button>
+          <button className="w-full rounded bg-[#284e3c] px-4 py-3 text-sm font-bold !text-white hover:bg-[#1d3e2d] disabled:opacity-50" disabled={busy} type="submit">{busy ? 'Signing in…' : 'Sign in'}</button>
           <button className="w-full rounded border border-[#cfd5cf] bg-[#f6f8f4] px-4 py-3 text-sm font-bold text-[#2d4d3f] hover:bg-[#edf2ea] disabled:opacity-50" disabled={busy} onClick={useDemoAccount} type="button">Try demo account</button>
         </form>
         <p className="mt-6 text-center text-sm text-[#777f76]">New to StudyMate? <Link className="font-semibold text-[#386951] underline" to="/signup">Create an account</Link></p>

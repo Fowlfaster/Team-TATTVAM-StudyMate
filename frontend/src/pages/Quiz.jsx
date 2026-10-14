@@ -8,7 +8,7 @@ import LoadingStatus from '../components/LoadingStatus'
 import SubjectScopeSelector from '../components/SubjectScopeSelector'
 import useSubjectScope from '../components/useSubjectScope'
 import VideoModal from '../components/VideoModal'
-import { API_BASE_URL } from '../api'
+import { API_BASE } from '../api'
 
 const optionLetters = ['A', 'B', 'C', 'D']
 
@@ -74,7 +74,7 @@ export default function Quiz() {
   }
 
   const startQuiz = async () => {
-    if (!subjectId || !sourceIds.length || loading) return
+    if (!subjectId || !sourceIds.length || !selectedTopicIds.length || loading) return
     setLoading(true)
     setError('')
     setQuiz(null)
@@ -141,7 +141,7 @@ export default function Quiz() {
   const videoUrl = videoCitation
     ? /^https?:\/\//i.test(videoCitation.file_name)
       ? videoCitation.file_name
-      : `${API_BASE_URL}/sources/${videoCitation.source_id}/video`
+      : `${API_BASE}/sources/${videoCitation.source_id}/video`
     : ''
   const selectedTopicName = topics.find((topic) => String(topic.id) === (selectedTopicIds[0] ?? ''))?.name ?? (quiz?.topic ?? 'Topic')
 
@@ -169,7 +169,7 @@ export default function Quiz() {
             : !subjectId ? <div className="quiz-empty"><h2>Create a subject first</h2><p>Select a subject folder to find your study material.</p><Link className="button button-dark" to="/upload">Open study library <ArrowRight size={15} /></Link></div>
               : sourceIds.length === 0 ? <div className="quiz-empty"><span className="quiz-empty-icon"><CircleHelp size={24} /></span><h2>Upload material first</h2><p>This subject has no ready sources yet.</p><Link className="button button-dark" to="/upload">Go to your library <ArrowRight size={15} /></Link></div>
                 : topics.length === 0 ? <div className="quiz-empty"><h2>No topics found</h2><p>Ready sources in this subject do not have topics yet.</p></div>
-                  : !session ? <div className="quiz-empty"><span className="quiz-empty-icon"><CircleHelp size={24} /></span><h2>Ready when you are</h2><p>{sourceIds.length} source{sourceIds.length === 1 ? '' : 's'} · {selectedTopicIds.length ? `${selectedTopicIds.length} topic${selectedTopicIds.length === 1 ? '' : 's'} selected` : 'all topics'}</p>{error && <p className="message-error" role="alert">{error}</p>}<button className="button button-dark" disabled={loading} onClick={startQuiz} type="button">{loading ? 'Starting…' : 'Start quiz'}</button></div>
+                  : !session ? <div className="quiz-empty"><span className="quiz-empty-icon"><CircleHelp size={24} /></span><h2>Ready when you are</h2><p>{sourceIds.length} source{sourceIds.length === 1 ? '' : 's'} · {selectedTopicIds.length ? `${selectedTopicIds.length} topic${selectedTopicIds.length === 1 ? '' : 's'} selected` : 'Select at least one topic'}</p>{error && <p className="message-error" role="alert">{error}</p>}<button className="button button-dark" disabled={loading || selectedTopicIds.length === 0} onClick={startQuiz} type="button">{loading ? 'Starting…' : 'Start quiz'}</button></div>
                     : loading ? <LoadingStatus className="quiz-loading" label="Finding the right question for you…" />
                       : error && !quiz ? <div className="quiz-empty"><span className="quiz-empty-icon"><CircleHelp size={24} /></span><h2>No question just yet</h2><p>{error}</p><button className="button button-dark" onClick={() => loadQuestion()} type="button"><RotateCw size={15} /> Try again</button></div>
                         : quiz ? <>

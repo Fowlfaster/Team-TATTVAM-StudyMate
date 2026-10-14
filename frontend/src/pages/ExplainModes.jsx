@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, BookOpenCheck, RefreshCw, Sparkles, TriangleAlert } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { API_BASE_URL, explainKeyTopics, explainSimply, getApiErrorMessage, retryKeyTopic } from '../api'
+import { API_BASE, explainKeyTopics, explainSimply, getApiErrorMessage, retryKeyTopic } from '../api'
 import CitationChip from '../components/CitationChip'
+import ElaborationPanel from '../components/ElaborationPanel'
 import HighlightedText from '../components/HighlightedText'
 import LoadingStatus from '../components/LoadingStatus'
+import RichExplanation from '../components/RichExplanation'
 import SubjectScopeSelector from '../components/SubjectScopeSelector'
 import VideoModal from '../components/VideoModal'
 import useSubjectScope from '../components/useSubjectScope'
@@ -35,7 +37,7 @@ export default function ExplainModes() {
   const videoUrl = videoCitation
     ? /^https?:\/\//i.test(videoCitation.file_name)
       ? videoCitation.file_name
-      : `${API_BASE_URL}/sources/${videoCitation.source_id}/video`
+      : `${API_BASE}/sources/${videoCitation.source_id}/video`
     : ''
 
   useEffect(() => {
@@ -132,7 +134,9 @@ export default function ExplainModes() {
           {result && !loading && <section className="explain-result-section">
             <header className="explain-result-heading"><div><span className="section-kicker">{mode === 'simple' ? 'THE BIG PICTURE' : 'PRIORITIZED STUDY GUIDE'}</span><h2>{result.title}</h2></div><button className="button button-outline" disabled={loading} onClick={() => runMode(mode, true)} type="button"><RefreshCw size={14} /> Regenerate</button></header>
             {mode === 'simple' ? <article className="simple-explanation-content">
-              <HighlightedText className="simple-big-picture" highlights text={result.big_picture} />
+              {(result.key_points ?? []).length > 0 && <section className="explanation-key-points"><h3>Key points</h3><ul>{result.key_points.map((point, index) => <li key={`${index}-${point}`}>{point}</li>)}</ul></section>}
+              <RichExplanation className="simple-big-picture" html={result.big_picture} />
+              <ElaborationPanel baseExplanation={result.big_picture} sourceId={sourceId ? Number(sourceId) : null} subjectId={subjectId} topicIds={topicIds} />
               <section className="simple-story-sections"><h3>How the ideas unfold</h3>{(result.story_sections ?? []).map((section, index) => <article className="simple-story-section" key={`${section.topic}-${index}`}><span className="section-kicker">{String(index + 1).padStart(2, '0')}</span><div><h4>{section.topic}</h4><HighlightedText highlights text={section.simple_explanation} /><p className="everyday-analogy"><strong>Everyday analogy</strong><HighlightedText highlights text={section.everyday_analogy} /></p></div></article>)}</section>
               <section className="simple-connection"><span className="section-kicker">HOW IT CONNECTS</span><HighlightedText highlights text={result.how_topics_connect} /></section>
               <section className="simple-remember"><h3>Five things to remember</h3><ol>{result.five_things_to_remember.map((item, index) => <li key={`${index}-${item}`}><HighlightedText highlights text={item} /></li>)}</ol></section>
@@ -142,7 +146,9 @@ export default function ExplainModes() {
               <summary><span><small>{topic.generation_failed ? "COULDN'T GENERATE" : 'KEY TOPIC'}</small><strong>{topic.topic}</strong><em><HighlightedText highlights text={topic.why_it_matters} /></em></span><ArrowRight size={17} /></summary>
               <div className="key-topic-content">
                 {topic.generation_failed ? <div className="key-topic-generation-error" role="alert"><p>{topic.generation_error || 'This topic could not be generated.'}</p><button className="button button-outline" disabled={retryingTopicId === topic.topic_id} onClick={() => retryTopic(topic)} type="button">{retryingTopicId === topic.topic_id ? 'Retrying…' : "Couldn't generate - Retry"}</button></div> : <>
-                <HighlightedText highlights text={topic.detailed_explanation} />
+                {(topic.key_points ?? []).length > 0 && <section className="explanation-key-points"><h3>Key points</h3><ul>{topic.key_points.map((point, index) => <li key={`${index}-${point}`}>{point}</li>)}</ul></section>}
+                <RichExplanation html={topic.detailed_explanation} />
+                <ElaborationPanel baseExplanation={topic.detailed_explanation} focus={topic.topic} sourceId={topic.source_id} subjectId={subjectId} topicId={topic.topic_id} />
                 {(topic.step_by_step ?? []).length > 0 && <section><h3>Step by step</h3><ol>{topic.step_by_step.map((step, index) => <li key={`${index}-${step}`}><HighlightedText highlights text={step} /></li>)}</ol></section>}
                 {topic.example && <section><h3>Example</h3><HighlightedText highlights text={topic.example} /></section>}
                 {topic.diagram_description && <section><h3>Diagram description</h3><HighlightedText highlights text={topic.diagram_description} /></section>}

@@ -12,13 +12,13 @@ StudyMate turns course files into a source-grounded tutor, adaptive quizzes, and
 
 ## Requirements
 
-- Python 3.10 or newer
+- Python 3.11
 - Node.js 20.19+ or 22.12+
 - A Groq API key for AI explanations, chat, quizzes, and audio/video transcription
 
 ## Setup
 
-Prerequisites: Python 3.10+, Node.js 20.19+ or 22.12+, and a Groq API key for chat, quizzes, and audio/video transcription.
+Prerequisites: Python 3.11, Node.js 20.19+ or 22.12+, and a Groq API key for chat, quizzes, and audio/video transcription.
 
 1. Configure the backend:
 
@@ -38,7 +38,7 @@ Prerequisites: Python 3.10+, Node.js 20.19+ or 22.12+, and a Groq API key for ch
    python seed.py
    ```
 
-   Ready sources are skipped on later runs. Video/audio ingestion uses Groq transcription. If the folder has no supported files, the script prints a prompt and exits without error. The first seeded source may download the configured sentence-transformer model.
+   Ready sources are skipped on later runs. Video/audio ingestion uses Groq transcription. If the folder has no supported files, the script prints a prompt and exits without error. The first embedding request downloads the configured FastEmbed model into `MODEL_CACHE_DIR`.
 
 4. Start the API in a backend terminal:
 
@@ -51,12 +51,14 @@ Prerequisites: Python 3.10+, Node.js 20.19+ or 22.12+, and a Groq API key for ch
    ```powershell
    cd frontend
    npm install
-   npm run dev -- --host 127.0.0.1
+   npm run dev
    ```
 
-6. Open <http://127.0.0.1:5173/>. The API is at <http://127.0.0.1:8000/> and its interactive docs are at <http://127.0.0.1:8000/docs>.
+6. Open <http://localhost:5173/>. The API is at <http://localhost:8000/> and its interactive docs are at <http://localhost:8000/docs>.
 
-The backend allows the Vite origins `localhost:5173` and `127.0.0.1:5173`. SQLite, ChromaDB, and uploaded files are stored under `backend/` by default.
+The backend allows the frontend origins listed in `FRONTEND_ORIGINS` (default `http://localhost:5173`). SQLite, ChromaDB, uploaded files, and the model cache are stored under `backend/` by default.
+
+For Render and Vercel deployment, follow the [deployment checklist](DEPLOY.md).
 
 ## Configuration
 
@@ -66,6 +68,9 @@ The backend allows the Vite origins `localhost:5173` and `127.0.0.1:5173`. SQLit
 | `GROQ_CHAT_MODEL` | `openai/gpt-oss-20b` | Chat completion model. |
 | `GROQ_WHISPER_MODEL` | `whisper-large-v3` | Audio/video transcription model. |
 | `EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Local text embedding model. |
+| `CHROMA_COLLECTION` | `studymate_v2` | Chroma collection for FastEmbed vectors. |
+| `MODEL_CACHE_DIR` | `model_cache` | Persistent FastEmbed model cache. |
+| `FRONTEND_ORIGINS` | `http://localhost:5173` | Comma-separated CORS origins. |
 | `JWT_SECRET` | Development-only value | Set a long random secret outside local development. |
 | `DATABASE_PATH` | `studymate.db` | SQLite database path. |
 | `CHROMA_DIR` | `chroma_data` | ChromaDB vector-store directory. |

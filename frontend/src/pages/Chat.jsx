@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, BookOpen, RotateCcw, Sparkles } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
-import { API_BASE_URL, askQuestion, getApiErrorMessage } from '../api'
+import { API_BASE, askQuestion, getApiErrorMessage } from '../api'
 import CitationChip from '../components/CitationChip'
 import HighlightedText from '../components/HighlightedText'
 import LoadingStatus from '../components/LoadingStatus'
@@ -81,7 +81,7 @@ export default function Chat() {
   const videoUrl = videoCitation
     ? /^https?:\/\//i.test(videoCitation.file_name)
       ? videoCitation.file_name
-      : `${API_BASE_URL}/sources/${videoCitation.source_id}/video`
+      : `${API_BASE}/sources/${videoCitation.source_id}/video`
     : ''
 
   return (

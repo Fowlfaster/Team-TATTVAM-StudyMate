@@ -48,7 +48,7 @@ export default function Signup() {
             <span className="mt-1 block text-xs font-normal text-[#777f76]">At least 6 characters</span>
           </label>
           {error && <p className="text-sm text-[#a33f34]" role="alert">{error}</p>}
-          <button className="w-full rounded bg-[#284e3c] px-4 py-3 text-sm font-bold text-white hover:bg-[#1d3e2d] disabled:opacity-50" disabled={busy} type="submit">{busy ? 'Creating account…' : 'Create account'}</button>
+          <button className="w-full rounded bg-[#284e3c] px-4 py-3 text-sm font-bold !text-white hover:bg-[#1d3e2d] disabled:opacity-50" disabled={busy} type="submit">{busy ? 'Creating account…' : 'Create account'}</button>
         </form>
         <p className="mt-6 text-center text-sm text-[#777f76]">Already registered? <Link className="font-semibold text-[#386951] underline" to="/login">Sign in</Link></p>
       </div>

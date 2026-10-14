@@ -3,11 +3,13 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 import chromadb
 import numpy as np
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from config import CHROMA_COLLECTION
 import main
 from db import Source, Topic, User
 
@@ -57,10 +59,6 @@ class IngestionDiagnosticsTests(unittest.TestCase):
             source = self.create_source(engine)
             chroma_client = chromadb.EphemeralClient()
 
-            class EmbeddingModel:
-                def encode(self, texts, normalize_embeddings=True):
-                    return np.array([[1.0, 0.0] for _ in texts])
-
             with patch("main.engine", engine), \
                  patch("main.extract_pdf_text", return_value=[{"text": "Course notes", "page": 1}]), \
                  patch("main.extract_topics", return_value=[{
@@ -68,7 +66,7 @@ class IngestionDiagnosticsTests(unittest.TestCase):
                      "summary": "Course foundations",
                      "chunk_ids": [f"{source.id}-0"],
                  }]), \
-                 patch("rag.store.get_embedding_model", return_value=EmbeddingModel()), \
+                 patch("rag.store.embed_texts", side_effect=lambda texts: np.array([[1.0, 0.0] for _ in texts])), \
                  patch("rag.store.chromadb.PersistentClient", return_value=chroma_client):
                 main._ingest_source(
                     source.id,
@@ -84,7 +82,7 @@ class IngestionDiagnosticsTests(unittest.TestCase):
                 self.assertEqual(saved_source.status, "ready")
                 self.assertIsNone(saved_source.error_message)
                 self.assertEqual(len(saved_topics), 1)
-            stored = chroma_client.get_or_create_collection("studymate").get(include=["metadatas"])
+            stored = chroma_client.get_or_create_collection(CHROMA_COLLECTION).get(include=["metadatas"])
             metadata = stored["metadatas"][0]
             self.assertEqual(metadata["user_id"], 23)
             self.assertIs(type(metadata["user_id"]), int)
@@ -92,6 +90,33 @@ class IngestionDiagnosticsTests(unittest.TestCase):
             self.assertIs(type(metadata["source_id"]), int)
             self.assertEqual(metadata["topic"], "Foundations")
             engine.dispose()
+
+    def test_migrates_legacy_collection_with_new_embeddings(self) -> None:
+        namespace = f"migration_{uuid4().hex}"
+        admin_client = chromadb.EphemeralClient()
+        admin_client._admin_client.create_tenant(name=namespace)
+        admin_client._admin_client.create_database(name=namespace, tenant=namespace)
+        chroma_client = chromadb.EphemeralClient(tenant=namespace, database=namespace)
+        legacy = chroma_client.get_or_create_collection("studymate")
+        legacy.add(
+            ids=["2-0"],
+            documents=["A thread shares its process address space."],
+            metadatas=[{"user_id": 23, "source_id": 2, "topic": "Threads"}],
+            embeddings=[[0.25, 0.75]],
+        )
+        with patch("main.CHROMA_COLLECTION", "studymate_v2"), \
+             patch("main.chromadb.PersistentClient", return_value=chroma_client), \
+             patch("main.embed_texts", return_value=np.array([[1.0, 0.0]])) as embed:
+            main._migrate_legacy_chroma_collection()
+
+        migrated = chroma_client.get_collection("studymate_v2").get(
+            include=["documents", "metadatas", "embeddings"],
+        )
+        self.assertEqual(migrated["ids"], ["2-0"])
+        self.assertEqual(migrated["documents"], ["A thread shares its process address space."])
+        self.assertEqual(migrated["metadatas"][0]["topic"], "Threads")
+        np.testing.assert_allclose(migrated["embeddings"], [[1.0, 0.0]])
+        embed.assert_called_once()
 
     def test_debug_route_reports_owned_chroma_and_topic_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -109,7 +134,7 @@ class IngestionDiagnosticsTests(unittest.TestCase):
                 session.commit()
 
             chroma_client = chromadb.EphemeralClient()
-            collection = chroma_client.get_or_create_collection("studymate")
+            collection = chroma_client.get_or_create_collection(CHROMA_COLLECTION)
             collection.add(
                 ids=[f"{source.id}-0"],
                 embeddings=[[1.0, 0.0]],
@@ -138,6 +163,25 @@ class IngestionDiagnosticsTests(unittest.TestCase):
                         password_hash="x",
                     ))
                 self.assertEqual(getattr(error.exception, "status_code", None), 403)
+            engine.dispose()
+
+    def test_source_file_route_serves_uploaded_file_with_relative_url(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = self.make_engine(directory)
+            source = self.create_source(engine, user_id=23)
+            uploads_dir = root / "uploads"
+            uploads_dir.mkdir()
+            stored_file = uploads_dir / f"{source.id}-smoke.pdf"
+            stored_file.write_bytes(b"sample pdf bytes")
+            user = User(id=23, name="Learner", email="learner@example.com", password_hash="x")
+            with patch("main.engine", engine), patch("main.UPLOADS_DIR", uploads_dir):
+                response = main.get_source_file(source.id, user)
+                source_response = main._source_response(source)
+
+            self.assertEqual(Path(response.path), stored_file)
+            self.assertEqual(source_response.file_url, f"/sources/{source.id}/file")
+            self.assertNotIn("localhost", source_response.file_url)
             engine.dispose()
 
 

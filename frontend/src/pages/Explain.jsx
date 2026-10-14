@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, BookOpenCheck, CircleHelp, FileText, Lightbulb, ListChecks, TriangleAlert } from 'lucide-react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { API_BASE_URL, analyzeSource, explainTopic, getApiErrorMessage, getSources, getSourceTopics } from '../api'
+import { API_BASE, analyzeSource, explainTopic, getApiErrorMessage, getSources, getSourceTopics } from '../api'
 import CitationChip from '../components/CitationChip'
 import HighlightedText from '../components/HighlightedText'
 import LoadingStatus from '../components/LoadingStatus'
@@ -221,7 +221,7 @@ export default function Explain() {
   const videoUrl = videoCitation
     ? /^https?:\/\//i.test(videoCitation.file_name)
       ? videoCitation.file_name
-      : `${API_BASE_URL}/sources/${videoCitation.source_id}/video`
+      : `${API_BASE}/sources/${videoCitation.source_id}/video`
     : ''
 
   return (
